@@ -3,7 +3,6 @@ from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI()
 
-# Permitir conexiones
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -16,25 +15,24 @@ rooms = {}
 
 @app.get("/")
 def home():
-    return {"status": "ok"}
+    return {"status": "MiniDC running"}
 
-@app.websocket("/ws/{room}/{username}")
-async def websocket_endpoint(ws: WebSocket, room: str, username: str):
+@app.websocket("/ws/{room_id}/{username}")
+async def websocket_endpoint(ws: WebSocket, room_id: str, username: str):
     await ws.accept()
 
-    if room not in rooms:
-        rooms[room] = []
+    if room_id not in rooms:
+        rooms[room_id] = []
 
-    rooms[room].append(ws)
+    rooms[room_id].append(ws)
 
     try:
         while True:
             data = await ws.receive_text()
+            msg = f"{username}: {data}"
 
-            message = f"{username}: {data}"
-
-            for client in rooms[room]:
-                await client.send_text(message)
+            for client in rooms[room_id]:
+                await client.send_text(msg)
 
     except WebSocketDisconnect:
-        rooms[room].remove(ws)
+        rooms[room_id].remove(ws)

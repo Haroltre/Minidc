@@ -1,91 +1,76 @@
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi import HTTPException
-import sqlite3
+from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI()
 
-# ================= DB =================
-conn = sqlite3.connect("chat.db", check_same_thread=False)
-cursor = conn.cursor()
-
-cursor.execute("""
-CREATE TABLE IF NOT EXISTS users (
-    username TEXT PRIMARY KEY,
-    password TEXT
+# Permitir todo (importante)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
-""")
 
-cursor.execute("""
-CREATE TABLE IF NOT EXISTS messages (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    room TEXT,
-    username TEXT,
-    message TEXT
-)
-""")
+# 🔐 Usuarios y salas
+users = {}  # username: password
+rooms = {}  # room: [websockets]
+messages = {}  # room: [mensajes]
 
-conn.commit()
 
-# ================= USERS =================
+@app.get("/")
+def home():
+    return {"status": "ok"}
 
+
+# 🧑 Registro
 @app.post("/register")
-def register(username: str, password: str):
-    try:
-        cursor.execute("INSERT INTO users VALUES (?, ?)", (username, password))
-        conn.commit()
-        return {"status": "ok"}
-    except:
-        raise HTTPException(status_code=400, detail="Usuario ya existe")
+async def register(data: dict):
+    username = data["username"]
+    password = data["password"]
 
+    if username in users:
+        return {"success": False, "msg": "Usuario ya existe"}
+
+    users[username] = password
+    return {"success": True}
+
+
+# 🔑 Login
 @app.post("/login")
-def login(username: str, password: str):
-    cursor.execute("SELECT * FROM users WHERE username=? AND password=?", (username, password))
-    user = cursor.fetchone()
-    if user:
-        return {"status": "ok"}
-    else:
-        raise HTTPException(status_code=401, detail="Credenciales incorrectas")
+async def login(data: dict):
+    username = data["username"]
+    password = data["password"]
 
-# ================= WEBSOCKET =================
+    if users.get(username) == password:
+        return {"success": True}
+    return {"success": False}
 
-rooms = {}  # room -> [websockets]
 
+# 💬 WebSocket
 @app.websocket("/ws/{room}/{username}")
-async def websocket_endpoint(websocket: WebSocket, room: str, username: str):
-    await websocket.accept()
+async def websocket_endpoint(ws: WebSocket, room: str, username: str):
+    await ws.accept()
 
     if room not in rooms:
         rooms[room] = []
+        messages[room] = []
 
-    rooms[room].append(websocket)
+    rooms[room].append(ws)
 
-    # 📜 enviar historial
-    cursor.execute("SELECT username, message FROM messages WHERE room=?", (room,))
-    history = cursor.fetchall()
-
-    for user, msg in history:
-        await websocket.send_text(f"{user}: {msg}")
-
-    # 🟢 notificar entrada
-    for client in rooms[room]:
-        await client.send_text(f"🟢 {username} entró a {room}")
+    # enviar historial
+    for msg in messages[room]:
+        await ws.send_text(msg)
 
     try:
         while True:
-            data = await websocket.receive_text()
+            data = await ws.receive_text()
+            msg = f"{username}: {data}"
 
-            # 💾 guardar mensaje
-            cursor.execute(
-                "INSERT INTO messages (room, username, message) VALUES (?, ?, ?)",
-                (room, username, data)
-            )
-            conn.commit()
+            messages[room].append(msg)
 
-            # 📡 enviar a todos
             for client in rooms[room]:
-                await client.send_text(f"{username}: {data}")
+                await client.send_text(msg)
 
     except WebSocketDisconnect:
-        rooms[room].remove(websocket)
-        for client in rooms[room]:
-            await client.send_text(f"🔴 {username} salió")
+        rooms[room].remove(ws)

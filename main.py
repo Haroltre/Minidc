@@ -1,25 +1,14 @@
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket
 
 app = FastAPI()
 
-clients = []
-
 @app.get("/")
 def home():
-    return {"status": "Servidor activo 🚀"}
+    return {"ok": True}
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
-    clients.append(websocket)
-
-    name = await websocket.receive_text()
-
-    try:
-        while True:
-            msg = await websocket.receive_text()
-            for client in clients:
-                await client.send_text(f"{name}: {msg}")
-
-    except WebSocketDisconnect:
-        clients.remove(websocket)
+    while True:
+        data = await websocket.receive_text()
+        await websocket.send_text(f"Echo: {data}")

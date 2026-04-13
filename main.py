@@ -3,7 +3,6 @@ from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI()
 
-# Permitir todo (importante)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -12,42 +11,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 🔐 Usuarios y salas
-users = {}  # username: password
-rooms = {}  # room: [websockets]
-messages = {}  # room: [mensajes]
-
+rooms = {}
+messages = {}
 
 @app.get("/")
 def home():
     return {"status": "ok"}
 
-
-# 🧑 Registro
-@app.post("/register")
-async def register(data: dict):
-    username = data["username"]
-    password = data["password"]
-
-    if username in users:
-        return {"success": False, "msg": "Usuario ya existe"}
-
-    users[username] = password
-    return {"success": True}
-
-
-# 🔑 Login
-@app.post("/login")
-async def login(data: dict):
-    username = data["username"]
-    password = data["password"]
-
-    if users.get(username) == password:
-        return {"success": True}
-    return {"success": False}
-
-
-# 💬 WebSocket
 @app.websocket("/ws/{room}/{username}")
 async def websocket_endpoint(ws: WebSocket, room: str, username: str):
     await ws.accept()
@@ -58,7 +28,6 @@ async def websocket_endpoint(ws: WebSocket, room: str, username: str):
 
     rooms[room].append(ws)
 
-    # enviar historial
     for msg in messages[room]:
         await ws.send_text(msg)
 

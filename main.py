@@ -2,7 +2,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 
 app = FastAPI()
 
-clients = {}
+clients = []
 
 @app.get("/")
 def home():
@@ -11,20 +11,15 @@ def home():
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
-    
-    name = await websocket.receive_text()
-    clients[websocket] = name
+    clients.append(websocket)
 
-    for client in clients:
-        await client.send_text(f"🟢 {name} se unió")
+    name = await websocket.receive_text()
 
     try:
         while True:
-            data = await websocket.receive_text()
+            msg = await websocket.receive_text()
             for client in clients:
-                await client.send_text(f"{name}: {data}")
+                await client.send_text(f"{name}: {msg}")
 
     except WebSocketDisconnect:
-        del clients[websocket]
-        for client in clients:
-            await client.send_text(f"🔴 {name} salió")
+        clients.remove(websocket)

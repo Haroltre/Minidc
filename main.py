@@ -5,7 +5,7 @@ import os
 app = FastAPI()
 
 # 🔥 MongoDB
-MONGO_URL = os.getenv("MONGO_URL")
+MONGO_URL = os.getenv("mongodb+srv://Admin:<db_password>@minidc.skngkjh.mongodb.net/?appName=MiniDc")
 client = MongoClient(MONGO_URL)
 db = client["minidc"]
 rooms_db = db["rooms"]

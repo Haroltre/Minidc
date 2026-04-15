@@ -1,59 +1,85 @@
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from pymongo import MongoClient
+import os
 
 app = FastAPI()
 
+# 🔥 MongoDB
+MONGO_URL = os.getenv("MONGO_URL")
+client = MongoClient(MONGO_URL)
+db = client["minidc"]
+rooms_db = db["rooms"]
+
+# 🧠 memoria en vivo
 rooms = {}
 users = {}
 owners = {}
-messages = {}
 
 @app.websocket("/ws/{room}/{username}")
 async def websocket_endpoint(ws: WebSocket, room: str, username: str):
     await ws.accept()
 
+    # crear sala si no existe
     if room not in rooms:
         rooms[room] = []
         users[room] = []
-        messages[room] = []
-        owners[room] = username  # 👑 primer usuario es owner
+
+        data = rooms_db.find_one({"room": room})
+
+        if not data:
+            rooms_db.insert_one({
+                "room": room,
+                "messages": [],
+                "owner": username
+            })
+            owners[room] = username
+        else:
+            owners[room] = data["owner"]
 
     rooms[room].append(ws)
     users[room].append(username)
 
-    # 📢 enviar historial
-    for msg in messages[room]:
-        await ws.send_text(msg)
+    # 📥 enviar mensajes guardados
+    data = rooms_db.find_one({"room": room})
+    if data:
+        for msg in data["messages"]:
+            await ws.send_text(msg)
 
-    # 📢 enviar usuarios
+    # 📢 actualizar usuarios
     async def send_users():
-        data = "USERS:" + ",".join(users[room])
+        msg = "USERS:" + ",".join(users[room])
         for client in rooms[room]:
-            await client.send_text(data)
+            await client.send_text(msg)
 
     await send_users()
 
     try:
         while True:
-            data = await ws.receive_text()
+            data_msg = await ws.receive_text()
 
-            # 👑 comando kick
-            if data.startswith("/kick "):
-                target = data.replace("/kick ", "")
-                if username == owners[room] and target in users[room]:
-                    index = users[room].index(target)
-                    client = rooms[room][index]
-                    await client.close()
+            # 👑 KICK
+            if data_msg.startswith("/kick "):
+                target = data_msg.replace("/kick ", "")
+                if username == owners[room]:
+                    for i, u in enumerate(users[room]):
+                        if u == target:
+                            await rooms[room][i].close()
                     continue
 
-            msg = f"{username}: {data}"
-            messages[room].append(msg)
+            msg = f"{username}: {data_msg}"
+
+            # 💾 guardar en Mongo
+            rooms_db.update_one(
+                {"room": room},
+                {"$push": {"messages": msg}}
+            )
 
             for client in rooms[room]:
                 await client.send_text(msg)
 
     except WebSocketDisconnect:
         if ws in rooms[room]:
-            index = rooms[room].index(ws)
+            i = rooms[room].index(ws)
             rooms[room].remove(ws)
             users[room].remove(username)
 

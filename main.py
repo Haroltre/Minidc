@@ -1,38 +1,38 @@
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI()
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
 rooms = {}
+users = {}
 
-@app.get("/")
-def home():
-    return {"status": "MiniDC running"}
-
-@app.websocket("/ws/{room_id}/{username}")
-async def websocket_endpoint(ws: WebSocket, room_id: str, username: str):
+@app.websocket("/ws/{room}/{username}")
+async def websocket_endpoint(ws: WebSocket, room: str, username: str):
     await ws.accept()
 
-    if room_id not in rooms:
-        rooms[room_id] = []
+    if room not in rooms:
+        rooms[room] = []
+        users[room] = []
 
-    rooms[room_id].append(ws)
+    rooms[room].append(ws)
+    users[room].append(username)
+
+    # 📢 enviar lista de usuarios
+    async def send_user_list():
+        data = "USERS:" + ",".join(users[room])
+        for client in rooms[room]:
+            await client.send_text(data)
+
+    await send_user_list()
 
     try:
         while True:
             data = await ws.receive_text()
             msg = f"{username}: {data}"
 
-            for client in rooms[room_id]:
+            for client in rooms[room]:
                 await client.send_text(msg)
 
     except WebSocketDisconnect:
-        rooms[room_id].remove(ws)
+        rooms[room].remove(ws)
+        users[room].remove(username)
+        await send_user_list()

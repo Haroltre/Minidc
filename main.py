@@ -1,86 +1,98 @@
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
 from pymongo import MongoClient
-import os
+import uuid
+from datetime import datetime
 
-app = FastAPI()
+# 🔥 IMPORTANTE: pega aquí tu URL de MongoDB Atlas
+MONGO_URL = "mongodb+srv://Admin:<db_password>@minidc.skngkjh.mongodb.net/?appName=MiniDc"
 
-# 🔥 MongoDB
-MONGO_URL = os.getenv("mongodb+srv://Admin:<db_password>@minidc.skngkjh.mongodb.net/?appName=MiniDc")
 client = MongoClient(MONGO_URL)
 db = client["minidc"]
 rooms_db = db["rooms"]
+messages_db = db["messages"]
 
-# 🧠 memoria en vivo
-rooms = {}
-users = {}
-owners = {}
+app = FastAPI()
 
-@app.websocket("/ws/{room}/{username}")
-async def websocket_endpoint(ws: WebSocket, room: str, username: str):
-    await ws.accept()
+# CORS (para evitar errores)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-    # crear sala si no existe
-    if room not in rooms:
-        rooms[room] = []
-        users[room] = []
+# Guardar conexiones activas
+rooms_connections = {}
 
-        data = rooms_db.find_one({"room": room})
+# -----------------------------
+# CREAR SALA
+# -----------------------------
+@app.post("/create_room")
+def create_room(name: str, creator: str):
+    room_id = str(uuid.uuid4())[:8]
 
-        if not data:
-            rooms_db.insert_one({
-                "room": room,
-                "messages": [],
-                "owner": username
-            })
-            owners[room] = username
-        else:
-            owners[room] = data["owner"]
+    room = {
+        "room_id": room_id,
+        "name": name,
+        "creator": creator,
+        "created_at": datetime.utcnow()
+    }
 
-    rooms[room].append(ws)
-    users[room].append(username)
+    rooms_db.insert_one(room)
 
-    # 📥 enviar mensajes guardados
-    data = rooms_db.find_one({"room": room})
-    if data:
-        for msg in data["messages"]:
-            await ws.send_text(msg)
+    return {
+        "room_id": room_id,
+        "link": f"https://minidc.onrender.com/join/{room_id}"
+    }
 
-    # 📢 actualizar usuarios
-    async def send_users():
-        msg = "USERS:" + ",".join(users[room])
-        for client in rooms[room]:
-            await client.send_text(msg)
+# -----------------------------
+# LISTAR MENSAJES
+# -----------------------------
+@app.get("/messages/{room_id}")
+def get_messages(room_id: str):
+    msgs = list(messages_db.find({"room_id": room_id}))
+    for m in msgs:
+        m["_id"] = str(m["_id"])
+    return msgs
 
-    await send_users()
+# -----------------------------
+# WEBSOCKET (CHAT)
+# -----------------------------
+@app.websocket("/ws/{room_id}/{username}")
+async def websocket_endpoint(websocket: WebSocket, room_id: str, username: str):
+    await websocket.accept()
+
+    if room_id not in rooms_connections:
+        rooms_connections[room_id] = []
+
+    rooms_connections[room_id].append(websocket)
 
     try:
         while True:
-            data_msg = await ws.receive_text()
+            data = await websocket.receive_text()
 
-            # 👑 KICK
-            if data_msg.startswith("/kick "):
-                target = data_msg.replace("/kick ", "")
-                if username == owners[room]:
-                    for i, u in enumerate(users[room]):
-                        if u == target:
-                            await rooms[room][i].close()
-                    continue
+            msg_data = {
+                "room_id": room_id,
+                "username": username,
+                "message": data,
+                "time": str(datetime.utcnow())
+            }
 
-            msg = f"{username}: {data_msg}"
+            # Guardar en MongoDB
+            messages_db.insert_one(msg_data)
 
-            # 💾 guardar en Mongo
-            rooms_db.update_one(
-                {"room": room},
-                {"$push": {"messages": msg}}
-            )
-
-            for client in rooms[room]:
-                await client.send_text(msg)
+            # Enviar a todos
+            for connection in rooms_connections[room_id]:
+                await connection.send_text(f"{username}: {data}")
 
     except WebSocketDisconnect:
-        if ws in rooms[room]:
-            i = rooms[room].index(ws)
-            rooms[room].remove(ws)
-            users[room].remove(username)
+        rooms_connections[room_id].remove(websocket)
 
-        await send_users()
+# -----------------------------
+# ROOT (para evitar 404)
+# -----------------------------
+@app.get("/")
+def root():
+    return {"status": "Servidor activo 🚀"}
